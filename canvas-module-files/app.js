@@ -16,7 +16,19 @@ window.addEventListener?.('scroll', fitDownloadPanel, { passive: true });
 window.addEventListener?.('resize', fitDownloadPanel);
 let result = null, selected = new Set(), selectedExternal = new Set(), format = '', chapter = '', jobs = [], runId = '', busy = false;
 let directory = null, directoryRootId = '', directoryJobs = [], latestBatchId = '', refreshPending = false, renderTimer = null;
-let zipJobs = [];
+let zipJobs = [], latestPlan = null, startingDownload = false;
+const unfinished = job => ['queued', 'in_progress', 'paused'].includes(job.state);
+function latestBatch() {
+  const courseJobs = allJobs().filter(j => j.courseKey === courseKey);
+  const id = latestBatchId || courseJobs.at(-1)?.batchId;
+  return courseJobs.filter(j => j.batchId === id);
+}
+function failedTargets(batch = latestBatch()) {
+  if (batch.some(unfinished)) return [];
+  // A failed final save produced no usable archive, even if collection succeeded.
+  if (batch[0]?.engine === 'zip' && batch[0].state === 'interrupted' && !batch[0].allFilesFailed && latestPlan?.batchId === batch[0].batchId) return latestPlan.targets.map(target => ({ key: target.file.key, path: target.filename }));
+  return batch[0]?.engine === 'zip' ? (batch[0].failures || []) : batch.filter(j => j.state === 'interrupted');
+}
 let controlRequest = 0, holdingRowControl = false, deferredRows = false, foregroundRowsDirty = false;
 function holdRowControl(event) { if (event.target.closest?.('.job-controls')) holdingRowControl = true; }
 function releaseRowControl() {
@@ -46,8 +58,15 @@ async function temporaryDirectory() {
   const temp = await (await navigator.storage.getDirectory()).getDirectoryHandle('canvas-zip-temp', { create: true });
   for await (const [name, handle] of temp.entries()) {
     if (handle.kind !== 'file') continue;
-    const file = await handle.getFile();
-    if (Date.now() - file.lastModified > 86400000) await temp.removeEntry(name);
+    let file;
+    try { file = await handle.getFile(); } catch (error) { if (error.name === 'NotFoundError') continue; throw error; }
+    const remove = async () => { try { await temp.removeEntry(name); } catch (error) { if (error.name !== 'NotFoundError') throw error; } };
+    if (Date.now() - file.lastModified > 86400000) {
+      const jobId = name.match(/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}/i)?.[0];
+      // A second assistant tab must not remove a long-paused live archive.
+      if (jobId && navigator.locks) await navigator.locks.request(`canvas-zip:${jobId}`, { ifAvailable: true }, async lock => { if (lock) await remove(); });
+      else if (!jobId) await remove();
+    }
   }
   return temp;
 }
@@ -59,8 +78,16 @@ async function saveZipBlob(blob, job) {
     if (job.state === 'cancelled') throw new Error(t('ZIP save cancelled'));
     const id = await chrome.downloads.download({ url, filename: job.name, saveAs: true, conflictAction: 'uniquify' });
     job.downloadId = id;
-    if (job.state === 'cancelled') await chrome.downloads.cancel(id);
-    else if (job.state === 'paused') await chrome.downloads.pause(id);
+    if (['cancelled', 'paused'].includes(job.state)) {
+      const [actual] = await chrome.downloads.search({ id });
+      if (actual?.state === 'complete') return actual.filename;
+      try { await chrome.downloads[job.state === 'cancelled' ? 'cancel' : 'pause'](id); }
+      catch (error) {
+        const [finished] = await chrome.downloads.search({ id });
+        if (finished?.state === 'complete') return finished.filename;
+        if (finished?.state !== 'interrupted') throw error;
+      }
+    }
     return await new Promise((resolve, reject) => {
       let checking = false;
       const check = async () => {
@@ -83,12 +110,18 @@ async function saveZipBlob(blob, job) {
   }
 }
 const zipDownloads = CanvasZipDownloads.create({ onUpdate: foregroundUpdate, getTempDirectory: temporaryDirectory, saveBlob: saveZipBlob,
+  withTempLease: (jobId, task) => navigator.locks ? navigator.locks.request(`canvas-zip:${jobId}`, task) : task(),
   controlSave: (action, job) => chrome.downloads[action === 'stop' ? 'cancel' : action](job.downloadId).catch(error => setStatus(I.message(error.message), true)) });
 function allJobs() { return [...jobs, ...directoryJobs, ...zipJobs].sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || '')); }
 function renderProgress() {
   const courseJobs = allJobs().filter(j => j.courseKey === courseKey);
   $('downloadPanel').hidden = !courseJobs.length;
   $('zipFailurePanel').hidden = true;
+  const failures = failedTargets();
+  $('retryFailed').hidden = !failures.length;
+  $('retryFailed').disabled = startingDownload || busy;
+  const rebuildZip = latestBatch()[0]?.engine === 'zip' && latestBatch()[0]?.state === 'interrupted' && !latestBatch()[0]?.allFilesFailed;
+  $('retryFailed').textContent = t(rebuildZip ? 'Rebuild unsaved ZIP ({v0})' : 'Retry failed only ({v0})', {v0: failures.length});
   if (!courseJobs.length) return;
   const batchId = latestBatchId || courseJobs.at(-1).batchId;
   const batch = courseJobs.filter(j => j.batchId === batchId), p = C.progressSummary(batch);
@@ -183,7 +216,7 @@ function updateSelection() {
   $('selectedTotal').textContent = String(total);
   $('selectionSummary').textContent = total ? t("{v0} selected", {v0: total}) : t("Nothing selected");
   $('selectionCount').textContent = t("Attachments: {v0} · External: {v1}", {v0: selected.size, v1: selectedExternal.size});
-  $('download').disabled = busy || !total || ($('downloadMode').value === 'zip' && zipJobs.some(j => ['queued', 'in_progress', 'paused'].includes(j.state)));
+  $('download').disabled = busy || startingDownload || !total || ($('downloadMode').value === 'zip' && zipJobs.some(unfinished));
   $('download').textContent = `${$('downloadMode').value === 'zip' ? t("Download ZIP") : t("Download selected files")}${total ? ` (${total})` : ''}`;
 }
 function renderFileRows(visible, targetId, selection) {
@@ -249,12 +282,15 @@ function renderFileRows(visible, targetId, selection) {
       }
       state.append(detail);
     }
-    if (job?.error) state.title = job.error;
+    if (job?.error) state.title = I.message(job.error);
     tr.append(checkCell, name, type, chapters, el('td', bytes(file.size)), state); $(targetId).append(tr);
   }
 }
 function renderRows() {
   if (holdingRowControl) { deferredRows = true; return; }
+  const focused = document.activeElement, focusedRow = focused?.closest?.('tr[data-key]');
+  const focusState = focusedRow ? { table: focusedRow.parentElement.id, key: focusedRow.dataset.key, index: [...focusedRow.querySelectorAll('input,button,a,summary')].indexOf(focused) } : null;
+  const expanded = new Map([...document.querySelectorAll('#files tr, #directFiles tr')].map(row => [row.dataset.key, [...row.querySelectorAll('details')].map(detail => detail.open)]));
   const visible = filtered(), attachments = (result?.files || []).filter(f => f.canvas !== false);
   $('empty').hidden = visible.length > 0; $('fileTable').hidden = !visible.length;
   $('emptyTitle').textContent = attachments.length ? t("No matching attachments") : t("No course attachments yet");
@@ -265,6 +301,11 @@ function renderRows() {
   $('directCount').textContent = t("Showing {v0} / {v1} · Unselected by default", {v0: external.length, v1: allExternal.length});
   $('directEmpty').hidden = external.length > 0; $('directTable').hidden = !external.length;
   renderFileRows(external, 'directFiles', selectedExternal);
+  for (const row of document.querySelectorAll('#files tr, #directFiles tr')) for (const [index, detail] of [...row.querySelectorAll('details')].entries()) if (expanded.get(row.dataset.key)?.[index]) detail.open = true;
+  if (focusState && focusState.index >= 0) {
+    const row = [...$(focusState.table).querySelectorAll('tr')].find(row => row.dataset.key === focusState.key);
+    row?.querySelectorAll('input,button,a,summary')[focusState.index]?.focus?.({ preventScroll: true });
+  }
   $('visibleCount').textContent = t("Showing {v0} / {v1} course attachments", {v0: visible.length, v1: attachments.length});
   updateSelection();
   renderProgress();
@@ -310,6 +351,37 @@ $('selectExternalVisible').onchange = () => { for (const f of filtered(true).fil
 $('pauseAll').onclick = () => controlDownloads('pause');
 $('resumeAll').onclick = () => controlDownloads('resume');
 $('stopAll').onclick = () => controlDownloads('stop');
+$('retryFailed').onclick = async () => {
+  if (startingDownload || busy) return;
+  const batch = latestBatch(), failed = failedTargets(batch);
+  if (!failed.length) return;
+  startingDownload = true; updateSelection(); renderProgress();
+  try {
+    const batchId = crypto.randomUUID(), createdAt = new Date().toISOString();
+    if (batch[0].engine === 'zip') {
+      if (latestPlan?.batchId !== batch[0].batchId) throw new Error(t('Reselect the failed files to download them again.'));
+      const targets = latestPlan.targets.filter(target => failed.some(f => f.key === target.file.key && f.path === target.filename));
+      if (!targets.length) throw new Error(t('Reselect the failed files to download them again.'));
+      const job = { jobId: crypto.randomUUID(), batchId, courseKey, engine: 'zip', name: C.zipFilename(latestPlan.courseName, t('Archive files label')), bytesReceived: 0, entriesDone: 0, state: 'queued', createdAt };
+      zipDownloads.start(latestPlan.root, targets, job);
+      latestPlan = { ...latestPlan, batchId, targets }; zipJobs = C.trimJobs([...zipJobs, job]); latestBatchId = batchId;
+    } else if (batch[0].engine === 'directory') {
+      if (latestPlan?.batchId !== batch[0].batchId) throw new Error(t('Reselect the failed files to download them again.'));
+      const retryJobs = failed.map(old => ({ ...old, jobId: crypto.randomUUID(), batchId, state: 'queued', bytesReceived: 0, error: '', failures: [], actualFilename: '', createdAt }));
+      directoryDownloads.start(latestPlan.root, retryJobs);
+      latestPlan = { ...latestPlan, batchId }; directoryJobs = C.trimJobs([...directoryJobs, ...retryJobs]); latestBatchId = batchId;
+    } else {
+      const keys = new Set(failed.map(job => job.fileKey)), files = (result?.files || []).filter(file => keys.has(file.key));
+      if (files.length !== keys.size) throw new Error(t('Scan the course again before retrying these files. Their saved file list has expired.'));
+      const response = await chrome.runtime.sendMessage({ type: 'RETRY_DOWNLOADS', appVersion, courseKey, jobIds: failed.map(job => job.jobId), selection: { courseName: result?.courseName, files }, explicitExternalKeys: files.filter(file => file.canvas === false).map(file => file.key) });
+      if (!response?.ok) throw new Error(response?.error || t('Reselect the failed files to download them again.'));
+      if (!response.addedCount) throw new Error(t('No failed targets were queued. They may already be downloading or completed.'));
+      jobs = response.jobs; if (response.addedCount) latestBatchId = response.batchId;
+    }
+    setStatus(t(batch[0].engine === 'zip' && batch[0].state === 'interrupted' && !batch[0].allFilesFailed ? 'Rebuilding the unsaved ZIP with all originally selected files.' : 'Retrying only failed targets, using their original destination and folder layout.'));
+  } catch (error) { setStatus(t('Download failed: {v0}', {v0: I.message(error.message)}), true); }
+  finally { startingDownload = false; renderRows(); }
+};
 $('languageSelect').onchange = async () => {
   const picker = $('languageSelect'); picker.disabled = true;
   try {
@@ -330,6 +402,9 @@ $('clearData').onclick = async () => {
     if (!response.ok) throw new Error(response.error);
     jobs = response.jobs; directoryJobs = C.trimJobs(directoryJobs).filter(j => ['queued', 'in_progress', 'paused'].includes(j.state));
     zipJobs = zipJobs.filter(j => ['queued', 'in_progress', 'paused'].includes(j.state));
+    const keptJobs = allJobs().filter(j => j.courseKey === courseKey);
+    if (!keptJobs.some(j => j.batchId === latestPlan?.batchId)) latestPlan = null;
+    if (!keptJobs.some(j => j.batchId === latestBatchId)) latestBatchId = keptJobs.at(-1)?.batchId || '';
     result = null; selected.clear(); selectedExternal.clear();
     $('courseName').textContent = t("Local lists cleared"); $('courseInfo').textContent = t("Scan again to get course files. Your download options have been kept.");
     for (const id of ['moduleCount', 'fileCount', 'formatCount', 'sizeCount']) $(id).textContent = '—';
@@ -370,7 +445,8 @@ $('scan').onclick = async () => {
   setStatus(t("Connecting to the course…"));
   try {
     const tab = await chrome.tabs.get(config.tabId);
-    if (!tab.url?.startsWith(`${config.origin}/courses/${config.courseId}`)) throw new Error(t("The course tab has changed. Click the extension icon again in the intended course."));
+    const tabUrl = tab.url && new URL(tab.url);
+    if (!tabUrl || tabUrl.origin !== config.origin || !new RegExp(`^/courses/${config.courseId}(?:/|$)`).test(tabUrl.pathname)) throw new Error(t("The course tab has changed. Click the extension icon again in the intended course."));
     await chrome.scripting.executeScript({ target: { tabId: config.tabId }, files: ['core.js', 'scanner.js'] });
     const [{ result: scanned }] = await chrome.scripting.executeScript({ target: { tabId: config.tabId }, func: opts => globalThis.CanvasFilesScanner.scan(opts), args: [{ origin: config.origin, courseId: config.courseId, runId }] });
     if (!scanned) throw new Error(t("No scan results received. Keep the course tab open."));
@@ -384,6 +460,8 @@ $('scan').onclick = async () => {
   finally { busy = false; $('scan').disabled = false; $('scan').textContent = t("↻ Scan all Modules"); render(); updateSelection(); if (failed) { $('scanBadge').textContent = t("This scan failed"); $('scanBadge').className = 'badge warning'; } }
 };
 $('download').onclick = async () => {
+  if (startingDownload || busy || !result || !(selected.size + selectedExternal.size)) return;
+  startingDownload = true;
   $('download').disabled = true;
   try {
     const selectionCount = selected.size + selectedExternal.size;
@@ -397,6 +475,7 @@ $('download').onclick = async () => {
       const targets = files.flatMap(file => C.downloadTargets(result.courseName, file, downloadOptions).map(target => ({ ...target, file })));
       const job = { jobId: crypto.randomUUID(), batchId: crypto.randomUUID(), courseKey, engine: 'zip', name: C.zipFilename(result.courseName, t('Archive files label')), bytesReceived: 0, totalBytes: targets.every(t => t.file.size > 0) ? targets.reduce((n,t) => n + t.file.size, 0) : null, entriesDone: 0, state: 'queued', createdAt: new Date().toISOString() };
       zipDownloads.start(outputDirectory, targets, job); zipJobs = C.trimJobs([...zipJobs, job]); latestBatchId = job.batchId;
+      latestPlan = { batchId: job.batchId, root: outputDirectory, targets, courseName: result.courseName };
       selected.clear(); selectedExternal.clear(); renderRows();
       setStatus(outputDirectory ? t("Packing {v0} files into a ZIP in “{v1}”. Keep this assistant tab open.", {v0: targets.length, v1: outputDirectory.name}) : t("Packing {v0} files into one ZIP. A save dialog will open when ready. Keep this assistant tab open.", {v0: targets.length}));
       return;
@@ -410,19 +489,21 @@ $('download').onclick = async () => {
       const batchId = crypto.randomUUID(), newJobs = [];
       for (const file of files) for (const target of C.downloadTargets(result.courseName, file, downloadOptions)) {
         if (directoryJobs.some(j => j.rootId === rootId && j.fileKey === file.key && j.filename === target.filename && ['queued', 'in_progress', 'paused'].includes(j.state))) continue;
-        newJobs.push({ ...target, jobId: crypto.randomUUID(), batchId, courseKey, rootId, engine: 'directory', fileKey: file.key, name: file.name, mime: file.mime || '', url: file.downloadUrl, expectedBytes: file.size || null, totalBytes: file.size || null, bytesReceived: 0, state: 'queued', createdAt: new Date().toISOString() });
+        newJobs.push({ ...target, sources: file.sources, jobId: crypto.randomUUID(), batchId, courseKey, rootId, engine: 'directory', fileKey: file.key, name: file.name, mime: file.mime || '', url: file.downloadUrl, expectedBytes: file.size || null, totalBytes: file.size || null, bytesReceived: 0, state: 'queued', createdAt: new Date().toISOString() });
       }
       directoryJobs = C.trimJobs([...directoryJobs, ...newJobs]); if (newJobs.length) latestBatchId = batchId;
       directoryDownloads.start(outputDirectory, newJobs);
+      if (newJobs.length) latestPlan = { batchId, root: outputDirectory };
       selected.clear(); selectedExternal.clear(); renderRows();
       setStatus(t("Started {v0} save tasks in “{v1}”. Keep this assistant tab open; pause, resume or stop at any time.", {v0: newJobs.length, v1: outputDirectory.name}));
       return;
     }
-    const response = await chrome.runtime.sendMessage({ type: 'START_DOWNLOADS', appVersion, courseKey, keys: [...selected, ...selectedExternal], explicitExternalKeys: [...selectedExternal], ...downloadOptions });
+    const selection = { courseName: result.courseName, files: result.files.filter(file => selected.has(file.key) || selectedExternal.has(file.key)) };
+    const response = await chrome.runtime.sendMessage({ type: 'START_DOWNLOADS', appVersion, courseKey, selection, keys: [...selected, ...selectedExternal], explicitExternalKeys: [...selectedExternal], ...downloadOptions });
     if (!response.ok) throw new Error(response.error);
     jobs = response.jobs; if (response.batchId && response.addedCount > 0) latestBatchId = response.batchId; setStatus(t("Queued {v0} save tasks from {v1} selected files. Up to 3 run at once. See “Show save location” for actual paths. Existing active targets are not queued again.", {v0: response.addedCount, v1: selectionCount})); selected.clear(); selectedExternal.clear(); renderRows();
   } catch (error) { setStatus(t("Download failed: {v0}", {v0: I.message(error.message)}), true); }
-  finally { updateSelection(); }
+  finally { startingDownload = false; updateSelection(); renderProgress(); }
 };
 chrome.runtime.onMessage.addListener(message => { if (message.type === 'SCAN_PROGRESS' && message.runId === runId) setStatus(t("{v0} · {v1} files found", {v0: I.message(message.text), v1: message.files})); });
 chrome.storage.onChanged.addListener((changes, area) => { if (area === 'local' && changes.downloadJobs) { jobs = changes.downloadJobs.newValue || []; if (result) renderRows(); updateStorageInfo().catch(() => {}); } });

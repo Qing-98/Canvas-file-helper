@@ -4,7 +4,8 @@
   "private": true,
   "description": "Canvas course file organizer Chrome extension",
   "scripts": {
-    "test": "node tests/test.cjs && node tests/download-control-test.cjs && node tests/ui-smoke.cjs && node tests/directory-test.cjs && node tests/zip-test.cjs && node tests/zip-edge-test.cjs && node tests/zip-filename-test.cjs && node tests/i18n-test.cjs"
+    "test": "node tests/test.cjs && node tests/scanner-edge-test.cjs && node tests/download-control-test.cjs && node tests/native-lifecycle-test.cjs && node tests/ui-smoke.cjs && node tests/directory-test.cjs && node tests/zip-test.cjs && node tests/zip-edge-test.cjs && node tests/transfer-test.cjs && node tests/zip-filename-test.cjs && node tests/i18n-test.cjs",
+    "test:browser": "node tests/browser-fixture-server.cjs"
   },
   "devDependencies": {
     "linkedom": "0.18.14"

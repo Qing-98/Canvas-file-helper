@@ -131,5 +131,23 @@ async function test(label,run) {try {await run();console.log('PASS '+label);} ca
     f.engine.control('stop','unrelated-job');assert.equal(j.state,'in_progress');response.resolve(new Response('denied',{status:401}));await settled(f,j);assert.equal(j.state,'interrupted');assert.equal(f.temp.files.size,0);
     const next=makeJob('fresh');f.engine.start(null,[target()],next);await settled(f,next);assert.equal(next.state,'complete');assert.equal(next.entriesFailed,0);assert.equal(next.failures.length,0);assert.equal(f.saved.length,1);
   });
+  await test('temporary lease covers staging, final save and all cleanup on success, failure and stop',async()=>{
+    for(const outcome of ['complete','failed','stopped']){
+      let leased=false,released=false,f;
+      const temp=new MemoryDirectory({write:()=>assert(leased,'temporary write outside lease')});
+      const originalRemove=temp.removeEntry.bind(temp);temp.removeEntry=async name=>{assert(leased,'cleanup outside lease');await originalRemove(name);};
+      f=fixture({getTempDirectory:async()=>{assert(leased);return temp;},withTempLease:async(id,task)=>{
+        assert.equal(id,'lease-'+outcome);leased=true;
+        try{await task();}finally{assert.equal(temp.files.size,0);assert.equal(temp.openWriters,0);leased=false;released=true;}
+      },saveBlob:async()=>{assert(leased);if(outcome==='failed')throw new Error('SAVE_FAILED');if(outcome==='stopped')f.engine.control('stop');return 'Downloads/archive.zip';}});
+      const j=makeJob('lease-'+outcome);f.engine.start(null,[target()],j);await settled(f,j);await until(()=>released,'lease released');
+      assert.equal(j.state,outcome==='complete'?'complete':outcome==='failed'?'interrupted':'cancelled');assert.equal(leased,false);
+    }
+  });
+  await test('lease acquisition failure settles the batch and allows a later attempt',async()=>{
+    let fail=true;const f=fixture({withTempLease:async(id,task)=>{if(fail)throw new Error('LEASE_UNAVAILABLE');return task();}}),j=makeJob('lease-fail');
+    f.engine.start(null,[target()],j);await settled(f,j);assert.equal(j.state,'interrupted');assert.match(j.error,/LEASE_UNAVAILABLE/);assert.equal(f.temp.files.size,0);
+    fail=false;const next=makeJob('lease-next');f.engine.start(null,[target()],next);await settled(f,next);assert.equal(next.state,'complete');
+  });
   assert.deepEqual(failures,[],'ZIP edge regression failures');
 })().catch(error=>{console.error(error);process.exitCode=1;});

@@ -67,6 +67,8 @@ Canvas/
 #### 进度与失败文件
 
 - 使用进度区的**暂停全部 / 继续全部 / 停止全部**控制当前课程未完成任务；停止后如需重试，请重新勾选下载。
+- 批次结束后可点击**仅重试失败项**，沿用原保存位置和目录，只补失败的副本。若整个 ZIP 最终保存失败，使用**重新打包未保存的 ZIP**重建全部原选文件。重新打开助手后如清单已过期，先重新扫描。
+- ZIP 和自选目录遇到 45 秒网络无响应、临时网络错误或 HTTP 408/429/5xx 时最多自动重试 2 次；暂停期间不计超时。401/403 不自动重试。
 - ZIP 中单个文件失败会跳过并继续处理其他文件。压缩包附带 `文件来源清单.json`；有失败时另附 `下载失败清单.json`，记录原因、章节和来源页面。全部失败时不生成空 ZIP。
 - ZIP 和自选文件夹模式运行期间，请保持助手页打开。暂停后少量在途数据可能仍由浏览器缓冲；停止会清理未完成文件，保留已完成文件。
 - 单个 ZIP 限制为约 4 GB、最多 65533 个文件，较大的课程请分批选择。
@@ -83,7 +85,7 @@ Canvas 登录失效、文件锁定、外部平台权限或网络中断都可能�
 
 **会一直缓存附件，占用磁盘吗？**
 
-不会持久缓存附件正文。课程清单最多保留 3 门、合计 2 MiB，30 天过期；已结束任务最多保留 100 条。ZIP 的临时数据在保存、取消或停止后清理；意外关闭页面留下的临时文件，超过 24 小时后在下次打开或清理时删除。页面提供**清理本地数据**，不会删除已下载文件。
+不会持久缓存附件正文。课程清单最多保留 3 门、合计 2 MiB，30 天过期；已结束任务最多保留 100 条。ZIP 的临时数据在保存、取消或停止后清理；意外关闭页面留下的临时文件，超过 24 小时后在下次打开或清理时删除；其他助手页仍在使用的临时包会保留。页面提供**清理本地数据**，不会删除已下载文件。
 
 ### 开发与文档
 
@@ -94,7 +96,7 @@ npm ci
 npm test
 ```
 
-测试覆盖 Modules 遍历、去重分类、下载队列、暂停停止、ZIP 失败续打包、存储清理和中英界面。测试使用模拟接口和本地文件；实际学校的登录和跨站下载仍需在 Chrome 中验证。
+自动测试覆盖扫描分页与限流、讨论/测验/LTI 链接、去重分类、后台重启与并发队列、暂停停止、失败项重试、ZIP 完整性、磁盘配额故障、清理和中英界面。真实 Chrome 本地测试另验证 16 MiB 流下载、OPFS、跳转、登录页响应和临时文件清理。学校 SSO/Cookie/CDN 与 Chrome 扩展后台的真实终止恢复仍需课程验收。详见 [测试范围与复现步骤](tests/README.md)。
 
 - [详细行为与权限说明](canvas-module-files/README.md)
 - [添加其他界面语言](canvas-module-files/LOCALIZATION.md)
@@ -162,6 +164,8 @@ A file referenced by several Modules appears only once in the list. Choose to sa
 #### Progress and failed files
 
 - Use **Pause all / Resume all / Stop all** to control unfinished tasks in the current course. To retry after stopping, select the files and start a new download.
+- After a batch finishes, use **Retry failed only** to retry failed copies with their original destination and paths. If the entire ZIP could not be saved, **Rebuild unsaved ZIP** includes all original selections. Rescan first if the saved file list has expired after reopening the assistant.
+- ZIP and custom-folder transfers retry temporary network failures, 45-second idle timeouts and HTTP 408/429/5xx responses up to twice. Pausing suspends the timeout; HTTP 401/403 responses are not automatically retried.
 - If an individual file fails during ZIP collection, the extension skips it and continues with the remaining files. The ZIP includes `文件来源清单.json` (file and source manifest). If any files fail, it also includes `下载失败清单.json` (failure report) with the reasons, Modules, and source pages. If every file fails, no empty ZIP is created.
 - Keep the assistant tab open while using ZIP or custom folder downloads. A small amount of in-flight data may remain buffered after pausing. Stopping cleans up unfinished files and keeps completed files.
 - Each ZIP must stay below approximately 4 GB and can contain at most 65,533 selected files. Split larger selections into smaller batches.
@@ -178,7 +182,7 @@ Replace the existing extension folder with the new files, open `chrome://extensi
 
 **Does it keep cached attachments and use up disk space?**
 
-Attachment contents are not cached persistently. Saved course lists are limited to 3 courses, 2 MiB in total, and expire after 30 days. Up to 100 finished task records are retained. Temporary ZIP data is cleaned up after saving, cancellation, or stopping. If the assistant closes unexpectedly, leftover temporary files older than 24 hours are removed the next time it opens or cleanup runs. **Clear local data** removes saved lists and finished task records without deleting downloaded files.
+Attachment contents are not cached persistently. Saved course lists are limited to 3 courses, 2 MiB in total, and expire after 30 days. Up to 100 finished task records are retained. Temporary ZIP data is cleaned up after saving, cancellation, or stopping. If the assistant closes unexpectedly, leftover temporary files older than 24 hours are removed the next time it opens or cleanup runs, unless another assistant tab is still using them. **Clear local data** removes saved lists and finished task records without deleting downloaded files.
 
 ### Development and documentation
 
@@ -189,7 +193,7 @@ npm ci
 npm test
 ```
 
-Tests cover Module traversal, deduplication, classification, download queues, pause and stop controls, ZIP collection with failed files, storage cleanup, and both interface languages. They use simulated APIs and local files; institution-specific sign-in and cross-site downloads still need verification in Chrome.
+Automated tests cover pagination and throttling, Discussion/Quiz/LTI links, deduplication, worker restart and concurrent queues, controls, failed-only retries, ZIP integrity, quota faults, cleanup and both languages. Local tests in real Chrome additionally verify 16 MiB streams, OPFS, redirects, login-page responses and temporary cleanup. Institution-specific SSO/cookies/CDNs and actual extension-worker termination still require course acceptance checks. See [test scope and reproduction steps](tests/README.md).
 
 - [Detailed behavior and permissions (Chinese)](canvas-module-files/README.md)
 - [Adding interface languages (Chinese)](canvas-module-files/LOCALIZATION.md)

@@ -269,5 +269,16 @@
   "All files failed; no empty archive was created. {v0}": "全部文件均下载失败，未生成空压缩包。{v0}",
   "ZIP saved · {v0} files included · {v1} failed files skipped (failure list included)": "ZIP 已保存 · 成功 {v0} 个 · 跳过 {v1} 个失败文件（已附失败清单）",
   "Skipped {v0} failed files": "已跳过 {v0} 个失败文件",
-  "All files failed; no empty archive was created.": "全部文件均下载失败，未生成空压缩包。"
+  "All files failed; no empty archive was created.": "全部文件均下载失败，未生成空压缩包。",
+  "Retry failed only ({v0})": "仅重试失败项（{v0}）",
+  "Reselect the failed files to download them again.": "请重新勾选失败文件后下载。",
+  "Retrying only failed targets, using their original destination and folder layout.": "正在仅重试失败项，沿用原来的保存位置和目录结构。",
+  "Network response timed out. Try again later.": "网络响应超时，请稍后重试",
+  "Canvas request timed out. Scan again later.": "Canvas 请求超时，请稍后重新扫描",
+  "Canvas is temporarily unavailable. Retrying…": "Canvas 暂时未响应，正在重试…",
+  "The previous download start could not be confirmed. Retry this file.": "上次下载启动未确认，请重新尝试该文件",
+  "Rebuild unsaved ZIP ({v0})": "重新打包未保存的 ZIP（{v0}）",
+  "Rebuilding the unsaved ZIP with all originally selected files.": "正在重新打包未保存的 ZIP，包含全部原选文件。",
+  "Scan the course again before retrying these files. Their saved file list has expired.": "这些文件的本地清单已过期，请重新扫描课程后重试。",
+  "No failed targets were queued. They may already be downloading or completed.": "没有加入重试任务，相关文件可能已在下载或已完成。"
 }

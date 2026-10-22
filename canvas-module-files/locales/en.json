@@ -269,5 +269,16 @@
   "All files failed; no empty archive was created. {v0}": "All files failed; no empty archive was created. {v0}",
   "ZIP saved · {v0} files included · {v1} failed files skipped (failure list included)": "ZIP saved · {v0} files included · {v1} failed files skipped (failure list included)",
   "Skipped {v0} failed files": "Skipped {v0} failed files",
-  "All files failed; no empty archive was created.": "All files failed; no empty archive was created."
+  "All files failed; no empty archive was created.": "All files failed; no empty archive was created.",
+  "Retry failed only ({v0})": "Retry failed only ({v0})",
+  "Reselect the failed files to download them again.": "Reselect the failed files to download them again.",
+  "Retrying only failed targets, using their original destination and folder layout.": "Retrying only failed targets, using their original destination and folder layout.",
+  "Network response timed out. Try again later.": "Network response timed out. Try again later.",
+  "Canvas request timed out. Scan again later.": "Canvas request timed out. Scan again later.",
+  "Canvas is temporarily unavailable. Retrying…": "Canvas is temporarily unavailable. Retrying…",
+  "The previous download start could not be confirmed. Retry this file.": "The previous download start could not be confirmed. Retry this file.",
+  "Rebuild unsaved ZIP ({v0})": "Rebuild unsaved ZIP ({v0})",
+  "Rebuilding the unsaved ZIP with all originally selected files.": "Rebuilding the unsaved ZIP with all originally selected files.",
+  "Scan the course again before retrying these files. Their saved file list has expired.": "Scan the course again before retrying these files. Their saved file list has expired.",
+  "No failed targets were queued. They may already be downloading or completed.": "No failed targets were queued. They may already be downloading or completed."
 }

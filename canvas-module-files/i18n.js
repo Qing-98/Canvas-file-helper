@@ -24,6 +24,8 @@
     // Scanner and download engines keep their data independent of the UI locale.
     // Translate their existing diagnostic messages at the presentation boundary.
     function message(text) {
+      if (text && typeof text === 'object' && typeof text.code === 'string') return t(text.code, text.params || {});
+      if (typeof text === 'string' && Object.hasOwn(base, text)) return t(text);
       if (typeof text !== 'string' || language === 'zh-CN') return text;
       for (const entry of reverse) {
         const match = text.match(entry.pattern); if (!match) continue;

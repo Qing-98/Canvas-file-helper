@@ -1,5 +1,6 @@
 (function (root) {
   'use strict';
+  const Transfers = root.CanvasTransfers || (typeof require === 'function' && require('./transfer.js'));
   function create(options = {}) {
     const entries = new Map(), fetcher = options.fetch || fetch;
     const library = options.zip || root.fflate;
@@ -68,35 +69,57 @@
             // Finish receiving one file before committing its ZIP entry. A failed
             // stream must not leave a truncated entry with a successful filename.
             try {
-              await gate(e); e.job.stage = 'collecting';
-              e.job.phase = `收集 ${index + 1} / ${e.targets.length}：${file.name}`;
-              progress(e, 0, !(file.size > 0)); emit(e);
-              response = await fetcher(file.downloadUrl, { credentials: 'include', signal: e.controller.signal });
-              if (!response.ok) throw new Error(`HTTP ${response.status}`);
-              if ((response.headers.get('content-type') || '').includes('text/html') && !/\.html?$/i.test(file.name) && !file.mime?.includes('html')) throw new Error('服务器返回了登录页或普通网页，已跳过此文件');
-              if (!response.body) throw new Error('服务器没有返回可读取的文件内容');
-              if (stagingDirectory) {
-                const name = `${e.job.jobId}-${index}.part`;
-                const handle = await stagingDirectory.getFileHandle(name, { create: true });
-                stageFile = { dir: stagingDirectory, name, handle };
-                stageWriter = await handle.createWritable();
+              for (let attempt = 0; ; attempt++) {
+                let retry;
+                await gate(e); e.job.stage = 'collecting'; e.job.retryAttempt = attempt;
+                e.job.phase = `收集 ${index + 1} / ${e.targets.length}：${file.name}`;
+                progress(e, 0, !(file.size > 0)); emit(e);
+                e.transfer = Transfers.create(e, options);
+                try {
+                  response = await e.transfer.network(() => fetcher(file.downloadUrl, { credentials: 'include', signal: e.transfer.signal }));
+                  if (!response.ok) throw Transfers.responseError(response);
+                  if ((response.headers.get('content-type') || '').includes('text/html') && !/\.html?$/i.test(file.name) && !file.mime?.includes('html')) throw new Error('服务器返回了登录页或普通网页，已跳过此文件');
+                  if (!response.body) throw new Error('服务器没有返回可读取的文件内容');
+                  await gate(e);
+                  if (stagingDirectory) {
+                    const name = `${e.job.jobId}-${index}.part`;
+                    const handle = await stagingDirectory.getFileHandle(name, { create: true });
+                    stageFile = { dir: stagingDirectory, name, handle };
+                    stageWriter = await handle.createWritable();
+                  }
+                  const size = Number(response.headers.get('content-length')) || file.size || null;
+                  progress(e, 0, !(size > 0)); emit(e);
+                  reader = response.body.getReader(); let lastUpdate = 0;
+                  while (true) {
+                    await gate(e); const { value, done } = await e.transfer.network(() => reader.read()); if (done) break;
+                    await gate(e); received += value.length; e.job.bytesReceived += value.length;
+                    if (received >= limit) throw new Error('单个文件超过 ZIP 上限，请改用逐个下载');
+                    if (stageWriter) await stageWriter.write(value); else fileChunks.push(value);
+                    progress(e, size > 0 ? .75 * Math.min(1, received / size) : 0, !(size > 0));
+                    if (Date.now() - lastUpdate >= 100) { emit(e); lastUpdate = Date.now(); }
+                    await yieldUI(e);
+                  }
+                  reader.releaseLock(); reader = null; await gate(e);
+                  if (stageWriter) { await stageWriter.close(); stageWriter = null; await gate(e); }
+                  staged = stageFile ? await stageFile.handle.getFile() : new Blob(fileChunks);
+                  fileChunks.length = 0;
+                  break;
+                } catch (error) {
+                  if (!e.controller.signal.aborted && Transfers.canRetry(error, attempt, options)) retry = error;
+                  else throw error;
+                } finally {
+                  e.transfer.dispose(); e.transfer = null;
+                  if (reader) { try { await reader.cancel(); } catch {} reader = null; }
+                  else if (response?.body) { try { await response.body.cancel(); } catch {} }
+                  if (stageWriter) { try { await stageWriter.abort(); } catch {} stageWriter = null; }
+                }
+                if (stageFile) { await stageFile.dir.removeEntry(stageFile.name); stageFile = null; }
+                fileChunks.length = 0; e.job.bytesReceived -= received; received = 0;
+                e.job.retryAttempt = attempt + 1; emit(e);
+                e.transfer = Transfers.create(e, options);
+                try { await e.transfer.wait(Transfers.retryDelay(retry, attempt, options)); }
+                finally { e.transfer.dispose(); e.transfer = null; }
               }
-              const size = Number(response.headers.get('content-length')) || file.size || null;
-              progress(e, 0, !(size > 0)); emit(e);
-              reader = response.body.getReader(); let lastUpdate = 0;
-              while (true) {
-                await gate(e); const { value, done } = await reader.read(); if (done) break;
-                await gate(e); received += value.length; e.job.bytesReceived += value.length;
-                if (received >= limit) throw new Error('单个文件超过 ZIP 上限，请改用逐个下载');
-                if (stageWriter) await stageWriter.write(value); else fileChunks.push(value);
-                progress(e, size > 0 ? .75 * Math.min(1, received / size) : 0, !(size > 0));
-                if (Date.now() - lastUpdate >= 100) { emit(e); lastUpdate = Date.now(); }
-                await yieldUI(e);
-              }
-              reader.releaseLock(); reader = null; await gate(e);
-              if (stageWriter) { await stageWriter.close(); stageWriter = null; }
-              staged = stageFile ? await stageFile.handle.getFile() : new Blob(fileChunks);
-              fileChunks.length = 0;
             } catch (error) {
               if (e.controller.signal.aborted) throw error;
               const failure = { path: target.filename, key: file.key || null, name: file.name, category: file.category, bytesReceived: received, sources: file.sources, status: 'failed', error: error.message || String(error) };
@@ -167,14 +190,26 @@
       if (entries.size) throw new Error('已有 ZIP 正在处理，请完成或停止后再开始');
       Object.assign(job, { engine: 'zip', entriesTotal: targets.length, entriesDone: 0, entriesFailed: 0, entriesProcessed: 0, failures: [], progressPercent: 0, progressIndeterminate: false });
       const e = { directory, targets, job, paused: false, waiters: [], controller: new AbortController() };
-      entries.set(job.jobId, e); job.state = 'in_progress'; emit(e); run(e);
+      entries.set(job.jobId, e); job.state = 'in_progress'; emit(e);
+      (async () => {
+        try {
+          if (options.withTempLease) await options.withTempLease(job.jobId, () => run(e));
+          else await run(e);
+        } catch (error) {
+          // A lease provider may reject before run() has taken ownership.
+          if (job.state !== 'cancelled') { job.state = 'interrupted'; job.error = error.message || String(error); }
+          job.progressIndeterminate = false;
+          job.phase = job.state === 'cancelled' ? '打包已停止，临时数据已释放' : `打包失败：${job.error}`;
+          entries.delete(job.jobId); emit(e);
+        }
+      })();
     }
     function control(action, jobId) {
       for (const e of entries.values()) {
         if (jobId && e.job.jobId !== jobId) continue;
         if (!['in_progress', 'paused'].includes(e.job.state)) continue;
-        if (action === 'pause') { e.paused = true; e.job.state = 'paused'; }
-        if (action === 'resume') { e.paused = false; e.job.state = 'in_progress'; wake(e); }
+        if (action === 'pause') { e.paused = true; e.job.state = 'paused'; e.transfer?.pause(); }
+        if (action === 'resume') { e.paused = false; e.job.state = 'in_progress'; e.transfer?.resume(); wake(e); }
         if (action === 'stop') { e.paused = false; e.job.state = 'cancelled'; e.controller.abort(); wake(e); }
         if (e.job.downloadId != null) options.controlSave?.(action, e.job);
         emit(e);

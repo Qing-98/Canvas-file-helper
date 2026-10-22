@@ -1,5 +1,6 @@
 (function (root) {
   'use strict';
+  const Transfers = root.CanvasTransfers || (typeof require === 'function' && require('./transfer.js'));
   function create(options = {}) {
     const fetcher = options.fetch || fetch;
     const entries = new Map(), reservations = new Set();
@@ -36,38 +37,64 @@
     async function run(entry) {
       let writer, reader;
       try {
-        await gate(entry);
-        const response = await fetcher(entry.job.url, { credentials: 'include', signal: entry.controller.signal });
-        if (!response.ok) throw new Error(`HTTP ${response.status}，请确认课程登录与文件访问权限`);
-        const mime = response.headers.get('content-type') || '';
-        if (mime.includes('text/html') && !/\.html?$/i.test(entry.job.name) && !entry.job.mime?.includes('html')) throw new Error('服务器返回了网页而不是文件，可能需要重新登录');
-        const length = Number(response.headers.get('content-length'));
-        entry.job.totalBytes = length > 0 ? length : entry.job.expectedBytes || null;
-        await gate(entry);
-        const handle = await allocate(entry);
-        writer = await handle.createWritable();
-        if (!response.body) throw new Error('服务器没有返回可读取的文件内容');
-        reader = response.body.getReader();
-        let lastUpdate = 0;
-        while (true) {
+        for (let attempt = 0; ; attempt++) {
+          let response, retry;
           await gate(entry);
-          const { value, done } = await reader.read();
-          if (done) break;
-          await gate(entry);
-          await writer.write(value);
-          entry.job.bytesReceived += value.byteLength;
-          if (Date.now() - lastUpdate >= 150) { emit(entry); lastUpdate = Date.now(); }
+          entry.transfer = Transfers.create(entry, options);
+          try {
+            response = await entry.transfer.network(() => fetcher(entry.job.url, { credentials: 'include', signal: entry.transfer.signal }));
+            if (!response.ok) throw Transfers.responseError(response, `HTTP ${response.status}，请确认课程登录与文件访问权限`);
+            const mime = response.headers.get('content-type') || '';
+            if (mime.includes('text/html') && !/\.html?$/i.test(entry.job.name) && !entry.job.mime?.includes('html')) throw new Error('服务器返回了网页而不是文件，可能需要重新登录');
+            const length = Number(response.headers.get('content-length'));
+            entry.job.totalBytes = length > 0 ? length : entry.job.expectedBytes || null;
+            await gate(entry);
+            const handle = await allocate(entry);
+            writer = await handle.createWritable();
+            if (!response.body) throw new Error('服务器没有返回可读取的文件内容');
+            reader = response.body.getReader();
+            let lastUpdate = 0;
+            while (true) {
+              await gate(entry);
+              const { value, done } = await entry.transfer.network(() => reader.read());
+              if (done) break;
+              await gate(entry);
+              await writer.write(value);
+              entry.job.bytesReceived += value.byteLength;
+              if (Date.now() - lastUpdate >= 150) { emit(entry); lastUpdate = Date.now(); }
+            }
+            await gate(entry);
+            await writer.close(); writer = null;
+            // close() can take long enough for a pause/stop click to arrive.
+            // Keep ownership of the new file until that control is observed.
+            await gate(entry);
+            entry.created = null;
+            entry.job.state = 'complete'; entry.job.pathVerified = true;
+            entry.job.totalBytes = entry.job.bytesReceived;
+            break;
+          } catch (error) {
+            if (!entry.controller.signal.aborted && Transfers.canRetry(error, attempt, options)) retry = error;
+            else throw error;
+          } finally {
+            entry.transfer.dispose(); entry.transfer = null;
+            if (reader) { try { await reader.cancel(); } catch {} reader = null; }
+            else if (response?.body) { try { await response.body.cancel(); } catch {} }
+            if (writer) { try { await writer.abort(); } catch {} writer = null; }
+            if (entry.created) { try { await entry.created.dir.removeEntry(entry.created.name); } catch {} entry.created = null; }
+            reservations.delete(entry.reservation);
+          }
+          entry.job.retryAttempt = attempt + 1; entry.job.bytesReceived = 0; emit(entry);
+          entry.transfer = Transfers.create(entry, options);
+          try { await entry.transfer.wait(Transfers.retryDelay(retry, attempt, options)); }
+          finally { entry.transfer.dispose(); entry.transfer = null; }
         }
-        await gate(entry);
-        await writer.close(); writer = null;
-        entry.job.state = 'complete'; entry.job.pathVerified = true;
-        entry.job.totalBytes = entry.job.bytesReceived;
       } catch (error) {
         if (writer) { try { await writer.abort(); } catch {} }
         if (entry.created) { try { await entry.created.dir.removeEntry(entry.created.name); } catch {} }
         if (entry.job.state !== 'cancelled') {
           entry.job.state = 'interrupted';
           entry.job.error = error.name === 'TypeError' ? `无法读取文件内容，请确认网站授权和登录状态，或切换默认下载目录：${error.message}` : error.message || String(error);
+          entry.job.failures = [{ key: entry.job.fileKey, name: entry.job.name, path: entry.job.filename, sources: entry.job.sources || [], error: entry.job.error, status: 'failed' }];
         }
       } finally {
         if (reader) { try { await reader.cancel(); } catch {} }
@@ -90,9 +117,9 @@
       for (const entry of entries.values()) {
         if (jobId && entry.job.jobId !== jobId) continue;
         if (!['queued', 'in_progress', 'paused'].includes(entry.job.state)) continue;
-        if (action === 'pause') { entry.paused = true; entry.job.state = 'paused'; }
-        else if (action === 'resume' && entry.paused) { entry.paused = false; entry.job.state = entry.started ? 'in_progress' : 'queued'; wake(entry); }
-        else if (action === 'stop') { entry.job.state = 'cancelled'; entry.paused = false; entry.controller.abort(); wake(entry); }
+        if (action === 'pause') { entry.paused = true; entry.job.state = 'paused'; entry.transfer?.pause(); }
+        else if (action === 'resume' && entry.paused) { entry.paused = false; entry.job.state = entry.started ? 'in_progress' : 'queued'; entry.transfer?.resume(); wake(entry); }
+        else if (action === 'stop') { entry.job.state = 'cancelled'; entry.paused = false; entry.controller.abort(); wake(entry); if (!entry.started) entries.delete(entry.job.jobId); }
         emit(entry);
       }
       pump();

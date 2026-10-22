@@ -28,3 +28,7 @@ footer{display:flex;align-items:center;justify-content:center;gap:12px;flex-wrap
 progress:indeterminate::-webkit-progress-bar{background:linear-gradient(90deg,#eaf0e7 15%,#548768 50%,#eaf0e7 85%);background-size:200% 100%;animation:zip-progress-sweep 1.4s linear infinite}
 @keyframes zip-progress-sweep{from{background-position:180% 0}to{background-position:-80% 0}}
 @media(prefers-reduced-motion:reduce){progress:indeterminate::-webkit-progress-bar{animation:none}}
+
+/* Keep long diagnostics and translated controls inside narrow windows. */
+#totalProgressText,.download-controls,.coverage-row{min-width:0;overflow-wrap:anywhere}.coverage-row span{min-width:0}.coverage-row span:last-child{white-space:normal}.selection{flex-wrap:wrap}.selection label{white-space:normal}.progress-heading{flex-wrap:wrap}.progress-heading #totalProgressText{text-align:left}
+@media(max-width:520px){.header-inner{flex-wrap:wrap;gap:10px}.header-actions{width:100%;justify-content:flex-end}.intro{flex-direction:column;gap:8px}.badge{margin-top:0}.download-settings{grid-template-columns:minmax(0,1fr)}.download-action{grid-template-columns:minmax(0,1fr)}#download{grid-column:1;grid-row:auto;margin-top:10px}.organize-settings{padding:4px 18px 14px}.coverage-row{flex-wrap:wrap}#coverage{grid-template-columns:minmax(0,1fr)}}

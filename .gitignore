@@ -1,0 +1,5 @@
+node_modules/
+*.zip
+work/
+/dist/
+/AGENTS.md

@@ -81,6 +81,13 @@ chrome.downloads.onCreated?.addListener(item => {
 });
 chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
   if (item.byExtensionId !== chrome.runtime.id) { suggest(); return; }
+  if (item.url?.startsWith('blob:' + chrome.runtime.getURL(''))) {
+    const key = 'zipFilename:' + item.url;
+    chrome.storage.session.get(key).then(stored => {
+      suggest(stored[key] ? { filename: stored[key], conflictAction: 'uniquify' } : undefined);
+    }, () => suggest());
+    return true;
+  }
   const known = requestedNames.get(item.id) || (startingJob?.url === item.url ? startingJob : null);
   if (known) {
     suggest({ filename: known.filename, conflictAction: 'uniquify' });
@@ -141,9 +148,25 @@ async function pump(jobs) {
   return jobs;
 }
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
-  if (!['START_DOWNLOADS', 'REFRESH_DOWNLOADS', 'SHOW_DOWNLOAD', 'CONTROL_DOWNLOADS', 'MAINTAIN_DATA', 'SAVE_SCAN', 'CLEAR_DATA'].includes(message.type)) return;
+  if (!['REGISTER_ZIP_FILENAME', 'RELEASE_ZIP_FILENAME', 'START_DOWNLOADS', 'REFRESH_DOWNLOADS', 'SHOW_DOWNLOAD', 'CONTROL_DOWNLOADS', 'MAINTAIN_DATA', 'SAVE_SCAN', 'CLEAR_DATA'].includes(message.type)) return;
   // Only extension pages may create download jobs.
   if (sender.id !== chrome.runtime.id || !sender.url?.startsWith(chrome.runtime.getURL(''))) return;
+  // Register before download(): Chrome ignores its filename option when this
+  // extension's filename listener is installed. Session storage also survives
+  // worker suspension while the user leaves the save dialog open.
+  if (['REGISTER_ZIP_FILENAME', 'RELEASE_ZIP_FILENAME'].includes(message.type)) {
+    if (typeof message.url !== 'string' || !message.url.startsWith('blob:' + chrome.runtime.getURL(''))) {
+      respond({ ok: false, error: 'Invalid ZIP download URL' }); return;
+    }
+    const key = 'zipFilename:' + message.url;
+    if (message.type === 'REGISTER_ZIP_FILENAME' && (typeof message.filename !== 'string' || !message.filename.endsWith('.zip') || /[<>:"/\\|?*\x00-\x1f]/.test(message.filename))) {
+      respond({ ok: false, error: 'Invalid ZIP filename' }); return;
+    }
+    const request = message.type === 'REGISTER_ZIP_FILENAME'
+      ? chrome.storage.session.set({ [key]: message.filename }) : chrome.storage.session.remove(key);
+    request.then(() => respond({ ok: true }), error => respond({ ok: false, error: error.message }));
+    return true;
+  }
   const immediate = message.type === 'CONTROL_DOWNLOADS' && ['pause', 'resume', 'stop'].includes(message.action) ? signalControl(message) : Promise.resolve([]);
   serialized(async () => {
     const stored = await chrome.storage.local.get(['downloadJobs', 'scanResults']);

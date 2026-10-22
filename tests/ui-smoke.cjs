@@ -97,6 +97,7 @@ vm.createContext(context);vm.runInContext(fs.readFileSync(root+'/app.js','utf8')
   document.getElementById('selectVisible').checked=true;document.getElementById('selectVisible').onchange();
   const requestsBefore=messages.filter(m=>m.type==='START_DOWNLOADS').length;await document.getElementById('download').onclick();
   assert.equal(zipStarts.length,1);assert.equal(zipStarts[0].root,null);assert.equal(zipStarts[0].targets.length,2);assert.equal(zipStarts[0].targets[0].file.key,'f');assert(zipStarts[0].targets[0].filename.includes('Lectorial'));assert.equal(messages.filter(m=>m.type==='START_DOWNLOADS').length,requestsBefore);
+  assert.match(zipStarts[0].job.name,/^Course_资料_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.zip$/);
   let savedOptions,listeners=new Set(),savedUrl;
   chrome.downloads={download:async opts=>{savedOptions=opts;savedUrl=opts.url;return 77;},search:async()=>[{id:77,state:'complete',filename:'D:/Downloads/Course.zip'}],onChanged:{addListener:l=>listeners.add(l),removeListener:l=>listeners.delete(l)}};
   context.blobToSave=new Blob(['archive']);context.jobToSave={name:'Course.zip',state:'in_progress'};
@@ -119,7 +120,7 @@ vm.createContext(context);vm.runInContext(fs.readFileSync(root+'/app.js','utf8')
   chrome.downloads.download=async opts=>{savedUrl=opts.url;return new Promise(resolve=>releaseSave=resolve);};
   context.jobToSave={name:'Course.zip',state:'in_progress'};
   const late=vm.runInContext('saveZipBlob(blobToSave,jobToSave)',context);const lateRejected=assert.rejects(late,/USER_CANCELED/);
-  context.jobToSave.state='cancelled';releaseSave(77);await lateRejected;assert.deepEqual(cancelledIds,[77]);assert.equal(listeners.size,0);assert.equal(require('node:buffer').resolveObjectURL(savedUrl),undefined);
+  await flush();context.jobToSave.state='cancelled';releaseSave(77);await lateRejected;assert.deepEqual(cancelledIds,[77]);assert.equal(listeners.size,0);assert.equal(require('node:buffer').resolveObjectURL(savedUrl),undefined);
   chrome.downloads.download=async opts=>{savedUrl=opts.url;throw new Error('SAVE_DIALOG_CANCELLED');};
   context.jobToSave={name:'Course.zip',state:'in_progress'};
   await assert.rejects(vm.runInContext('saveZipBlob(blobToSave,jobToSave)',context),/SAVE_DIALOG_CANCELLED/);assert.equal(listeners.size,0);assert.equal(require('node:buffer').resolveObjectURL(savedUrl),undefined);

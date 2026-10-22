@@ -47,6 +47,8 @@ A Chrome extension for collecting Canvas course files across all Modules, organi
 
 首次使用 ZIP 或自选目录下载时，Chrome 可能会请求读取所选文件来源网站的权限。允许后，插件使用浏览器现有的登录会话获取文件。
 
+ZIP 默认命名为 `课程名_资料_YYYY-MM-DD_HH-mm-ss.zip`，使用本地日期时间；英文界面使用 `Course name_Files_YYYY-MM-DD_HH-mm-ss.zip`。例如 `Switched Mode Power Supplies (2650)_资料_2026-10-22_22-15-30.zip`。保存到 Chrome 或自选文件夹时都使用该名称，同名文件自动编号。
+
 #### 按章节和来源页面整理
 
 开启**按 Module 创建文件夹**和**保留来源页面目录**后，目录结构如下；ZIP 内部使用相同结构：
@@ -139,6 +141,8 @@ The language menu switches between Chinese and English. Course names, Module nam
 | Choose local folder… | Opens the system folder picker. After you grant write access, the extension writes the ZIP or individual files directly to that folder. Choose it again each time you open the assistant. |
 
 When you first use ZIP downloads or a custom folder, Chrome may ask for permission to read the selected files' source websites. Once granted, the extension uses the browser's existing signed-in session to retrieve them.
+
+ZIP archives use `Course name_Files_YYYY-MM-DD_HH-mm-ss.zip`, based on your local date and time. The Chinese interface uses `资料` in place of `Files`. For example: `Switched Mode Power Supplies (2650)_Files_2026-10-22_22-15-30.zip`. Chrome downloads and custom folders use the same naming rule, with numbered suffixes for conflicts.
 
 #### Organize by Module and source page
 

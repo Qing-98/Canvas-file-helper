@@ -1,4 +1,6 @@
 {
+  "Archive files label": "Files",
+  "Cannot prepare ZIP filename. Reload the extension and reopen the assistant.": "Cannot prepare ZIP filename. Reload the extension and reopen the assistant.",
   "ZIP save cancelled": "ZIP save cancelled",
   "Completed {v0} / {v1} files · {v2}{v3}{v4}{v5}{v6}": "Completed {v0} / {v1} files · {v2}{v3}{v4}{v5}{v6}",
   " · Some file sizes are unknown": " · Some file sizes are unknown",

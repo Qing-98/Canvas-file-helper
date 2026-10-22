@@ -54,6 +54,9 @@ async function temporaryDirectory() {
 async function saveZipBlob(blob, job) {
   const url = URL.createObjectURL(blob);
   try {
+    const prepared = await chrome.runtime.sendMessage({ type: 'REGISTER_ZIP_FILENAME', url, filename: job.name });
+    if (!prepared?.ok) throw new Error(prepared?.error || t('Cannot prepare ZIP filename. Reload the extension and reopen the assistant.'));
+    if (job.state === 'cancelled') throw new Error(t('ZIP save cancelled'));
     const id = await chrome.downloads.download({ url, filename: job.name, saveAs: true, conflictAction: 'uniquify' });
     job.downloadId = id;
     if (job.state === 'cancelled') await chrome.downloads.cancel(id);
@@ -74,7 +77,10 @@ async function saveZipBlob(blob, job) {
       function cleanup() { clearInterval(timer); chrome.downloads.onChanged.removeListener(listener); }
       chrome.downloads.onChanged.addListener(listener); check();
     });
-  } finally { URL.revokeObjectURL(url); }
+  } finally {
+    URL.revokeObjectURL(url);
+    await chrome.runtime.sendMessage({ type: 'RELEASE_ZIP_FILENAME', url }).catch(() => {});
+  }
 }
 const zipDownloads = CanvasZipDownloads.create({ onUpdate: foregroundUpdate, getTempDirectory: temporaryDirectory, saveBlob: saveZipBlob,
   controlSave: (action, job) => chrome.downloads[action === 'stop' ? 'cancel' : action](job.downloadId).catch(error => setStatus(I.message(error.message), true)) });
@@ -389,7 +395,7 @@ $('download').onclick = async () => {
       const outputDirectory = directory;
       if (origins.length && !await chrome.permissions.request({ origins })) throw new Error(t("Permission to read file sources was not granted. ZIP packing did not start; try individual downloads."));
       const targets = files.flatMap(file => C.downloadTargets(result.courseName, file, downloadOptions).map(target => ({ ...target, file })));
-      const job = { jobId: crypto.randomUUID(), batchId: crypto.randomUUID(), courseKey, engine: 'zip', name: `${C.safeSegment(result.courseName)}_${new Date().toISOString().slice(0,10)}.zip`, bytesReceived: 0, totalBytes: targets.every(t => t.file.size > 0) ? targets.reduce((n,t) => n + t.file.size, 0) : null, entriesDone: 0, state: 'queued', createdAt: new Date().toISOString() };
+      const job = { jobId: crypto.randomUUID(), batchId: crypto.randomUUID(), courseKey, engine: 'zip', name: C.zipFilename(result.courseName, t('Archive files label')), bytesReceived: 0, totalBytes: targets.every(t => t.file.size > 0) ? targets.reduce((n,t) => n + t.file.size, 0) : null, entriesDone: 0, state: 'queued', createdAt: new Date().toISOString() };
       zipDownloads.start(outputDirectory, targets, job); zipJobs = C.trimJobs([...zipJobs, job]); latestBatchId = job.batchId;
       selected.clear(); selectedExternal.clear(); renderRows();
       setStatus(outputDirectory ? t("Packing {v0} files into a ZIP in “{v1}”. Keep this assistant tab open.", {v0: targets.length, v1: outputDirectory.name}) : t("Packing {v0} files into one ZIP. A save dialog will open when ready. Keep this assistant tab open.", {v0: targets.length}));

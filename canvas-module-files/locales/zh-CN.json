@@ -1,4 +1,6 @@
 {
+  "Archive files label": "资料",
+  "Cannot prepare ZIP filename. Reload the extension and reopen the assistant.": "无法准备 ZIP 文件名，请重新加载插件并重新打开助手页。",
   "ZIP save cancelled": "ZIP 保存已取消",
   "Completed {v0} / {v1} files · {v2}{v3}{v4}{v5}{v6}": "已完成 {v0} / {v1} 份 · {v2}{v3}{v4}{v5}{v6}",
   " · Some file sizes are unknown": " · 部分文件大小未知",

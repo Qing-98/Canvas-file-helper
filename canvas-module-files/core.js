@@ -72,6 +72,12 @@
     if (groupByPage) parts.push(safeSegment(source?.pageTitle, '直接附件'));
     return [...parts, safeSegment(file.category), safeSegment(file.name)].join('/');
   }
+  function zipFilename(course, label = '资料', now = new Date()) {
+    const pad = value => String(value).padStart(2, '0');
+    const date = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+    const time = `${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
+    return `${safeSegment(course, 'Canvas')}_${safeSegment(label)}_${date}_${time}.zip`;
+  }
   function downloadTargets(course, file, options = {}) {
     const groupByModule = options.groupByModule !== false;
     const groupByPage = options.groupByPage === true;
@@ -161,7 +167,7 @@
     const ended = jobs.filter(j => !['queued', 'in_progress', 'paused'].includes(j.state)).slice(-100).map(({ url, ...job }) => job);
     return [...ended, ...active];
   }
-  const api = { trimScans, trimJobs, groups, extension, category, knownFileName, directFileLink, directFileKey, sourcePageUrl, safeSegment, downloadPath, downloadTargets, checkSavedPath, progressSummary, fileId, canvasDownloadUrl, applyFileMetadata, nextLink };
+  const api = { trimScans, trimJobs, groups, extension, category, knownFileName, directFileLink, directFileKey, sourcePageUrl, safeSegment, zipFilename, downloadPath, downloadTargets, checkSavedPath, progressSummary, fileId, canvasDownloadUrl, applyFileMetadata, nextLink };
   root.CanvasFilesCore = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(globalThis);

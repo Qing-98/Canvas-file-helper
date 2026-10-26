@@ -3,7 +3,8 @@ const C = CanvasFilesCore;
 chrome.action.onClicked.addListener(async tab => {
   const url = tab.url ? new URL(tab.url) : null;
   const courseId = url?.pathname.match(/^\/courses\/(\d+)(?:\/|$)/)?.[1];
-  const params = new URLSearchParams(courseId ? { tab: String(tab.id), origin: url.origin, course: courseId } : {});
+  if (!courseId) return;
+  const params = new URLSearchParams({ tab: String(tab.id), origin: url.origin, course: courseId });
   await chrome.tabs.create({ url: chrome.runtime.getURL('app.html') + '?' + params });
 });
 
